@@ -7,7 +7,7 @@ import subprocess
 import sys
 import shutil
 import re
-
+import json 
 from Cython.Distutils import build_ext
 import numpy
 from setuptools import setup, find_packages, Extension
@@ -31,20 +31,23 @@ IS_WINDOWS = sys.platform == "win32"
 
 CC_COMPATIBILITY_TABLE = [
     # gencode, code, support_begin, suport_end
-    (20, 20,    1,  1.0),
-    (30, 30,    1, 11.0), 
-    (35, 35,    1, 12.0),
-    (37, 37,    1, 12.0), 
-    (50, 50,  6.5, 999), 
-    (52, 52,  6.5, 999 ), 
-    (60, 60,  8.0, 999 ), 
-    (61, 61,  8.0, 999 ), 
-    (70, 70,  9.0, 999 ), 
-    (75, 75, 10.0, 999 ), # From CUDA 10
-    (80, 80, 11.0, 999 ), # From CUDA 11.0
-    (86, 86, 11.1, 999 ), # From CUDA 11.1
-    (87, 87, 11.5, 999 ), 
-    (90, 90, 11.8, 999 ), # From CUDA 12
+    (20, 20, 1, 1.0),
+    (30, 30, 1, 11.0),
+    (35, 35, 1, 12.0),
+    (37, 37, 1, 12.0),
+    (50, 50, 6.5, 999),
+    (52, 52, 6.5, 999),
+    (60, 60, 8.0, 999),
+    (61, 61, 8.0, 999),
+    (70, 70, 9.0, 999),
+    (75, 75, 10.0, 999),  # CUDA 10+
+    (80, 80, 11.0, 999),  # CUDA 11.0+
+    (86, 86, 11.1, 999),  # RTX 3090 / A4000
+    (87, 87, 11.5, 999),
+    (89, 89, 11.8, 999),  # ADD THIS: RTX 4090 (Ada Lovelace)
+    (90, 90, 11.8, 999),  # H100 (Hopper)
+    (100, 100, 12.8, 999), # ADD THIS: Blackwell Datacenter
+    (120, 120, 12.8, 999), # ADD THIS: RTX 5090 (Blackwell Consumer)
 ]
 
 COMPUTE_CAPABILITY_ARGS = [
@@ -262,7 +265,8 @@ class BuildExtension(build_ext):
                 # NVCC does not allow multiple -std to be passed, so we avoid
                 # overriding the option if the user explicitly passed it.
                 if not any(flag.startswith("-std=") for flag in cflags):
-                    cflags.append("-std=c++11")
+                    # cflags.append("-std=c++11")
+                    cflags.append("-std=c++17")  # <-- CHANGE FROM -std=c++11 TO -std=c++17
 
                 original_compile(obj, src, ext, cc_args, cflags, pp_opts)
             finally:
