@@ -12,7 +12,7 @@ BASE_CFG = "config_simulated_small.cfg"
 TMP_CFG = "__fdk_tmp_config.cfg"
 
 # CGLS iterations to test
-ITERATIONS = list(range(0, 21))
+ITERATIONS = [1,5,7,10,12,15,20]
 
 # ==========================================================
 
