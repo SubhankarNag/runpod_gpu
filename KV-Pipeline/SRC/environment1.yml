@@ -1,0 +1,44 @@
+name: kv_env
+
+channels:
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10.13
+  - pip
+
+  # CUDA
+  - cuda-toolkit=12.2
+  - cuda-nvcc=12.2
+
+  - numpy=1.26.4
+  - scipy
+  - scikit-image
+  - matplotlib
+  - pillow
+  - hdf5
+  - h5py
+  - vtk
+  - pyvista
+  - open3d
+  - trimesh
+  - imageio
+  - cython
+  - setuptools
+  - wheel
+
+  - pip:
+      - cadquery==2.4.0
+      - cadquery-ocp==7.7.2
+      - casadi==3.7.1
+      - ezdxf==1.4.2
+      - networkx==3.4.2
+      - nibabel==5.3.2
+      - tifffile==2025.5.10
+      - tqdm==4.67.1
+      - multimethod==1.9.1
+      - typish==1.9.3
+      - nptyping==2.0.1
+      - nlopt==2.7.1
