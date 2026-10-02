@@ -1,0 +1,134 @@
+# ==========================================
+# Data & Large Datasets
+# ==========================================
+data/
+datasets/
+dataset/
+raw_data/
+processed_data/
+*.dat
+*.raw
+*.bin
+*.dcm
+*.nii
+*.nii.gz
+*.mhd
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.mat
+
+# Keep directory structure if .gitkeep is used
+!**/data/.gitkeep
+!**/datasets/.gitkeep
+
+# ==========================================
+# Model Weights & Checkpoints
+# ==========================================
+checkpoints/
+models/
+weights/
+saved_models/
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.safetensors
+*.engine
+
+# ==========================================
+# Logs, Outputs & Experiment Tracking
+# ==========================================
+logs/
+runs/
+wandb/
+lightning_logs/
+outputs/
+results/
+*.log
+events.out.tfevents.*
+
+# ==========================================
+# Python & Bytecode
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Distribution / Packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Type Checking
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# ==========================================
+# Virtual Environments
+# ==========================================
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ==========================================
+# Jupyter Notebooks
+# ==========================================
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# ==========================================
+# Environment Variables & Secrets
+# ==========================================
+.env
+.env.*
+!.env.example
+
+# ==========================================
+# Operating System & IDE Files
+# ==========================================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# IDEs
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~

@@ -8,7 +8,6 @@ import matplotlib.pyplot as plt
 import imageio
 from PIL import Image, ImageDraw, ImageFont
 import os
-import csv  # [NEW FIRMWARE] Needed to read separate metadata CSV
 
 # --- HELPER LOGIC ---
 def make_int_if_possible(x):
@@ -104,48 +103,8 @@ def make_gif(frames, global_min, global_max, filepath, fps=5):
     imageio.mimsave(filepath, gif_frames, fps=fps, loop=0)
 
 # --- CORE PROCESSING ---
-
-# [NEW FIRMWARE] New function: reads object .dat files that have NO inline metadata.
-# Metadata (ViewID, timestamps) comes from a separate CSV file.
-def extraction_object(fname, metadata_csv, config_data, start=0, end=None):
-    """Reads new-firmware object .dat files (pure pixel data, no inline metadata).
-    Metadata is read from a separate CSV file."""
-    PIXELS = config_data['rows'] * config_data['cols']
-
-    raw = np.fromfile(fname, dtype=np.uint16)
-    views = raw.size // PIXELS
-    
-    if end is None:
-        end = views
-    
-    pixels = raw.reshape(views, PIXELS)
-    
-    # [NEW FIRMWARE] Read metadata from separate CSV
-    view_ids = []
-    timestamps_us = []
-    with open(metadata_csv, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            view_ids.append(int(row['ViewID']))
-            timestamps_us.append(int(row['Timestamp(us)']))
-    
-    view_ids = np.array(view_ids, dtype=np.int32)
-    timestamps_us = np.array(timestamps_us, dtype=np.uint64)
-    
-    # Compute displacement from timestamps (same logic as before)
-    speed = config_data['conveyor_speed']
-    speed = speed * 1000  # conversion into mm/sec
-    t0 = timestamps_us[0] if len(timestamps_us) > 0 else 0
-    displacement = speed * (timestamps_us - t0) * 1e-6
-    
-    # [NEW FIRMWARE] ViewID directly serves as the angular index (0-1439 range),
-    # replacing the old encoder tick -> angle_idx conversion.
-    return pixels[start:end], view_ids[start:end], displacement[start:end]
-
-
-# [ORIGINAL] Kept for air scans which still have inline metadata (old firmware format).
-def extraction_air(fname, config_data):
-    """Reads raw 16-bit binary .dat files WITH inline metadata (air scan, old format)."""
+def extraction(fname, config_data, start=0, end=None):
+    """Reads raw 16-bit binary .dat files, isolates pixel data, and calculates physical displacement."""
     META = config_data['meta_size']
     PIXELS = config_data['rows'] * config_data['cols']
     RECORD = META + PIXELS
@@ -153,12 +112,30 @@ def extraction_air(fname, config_data):
     raw = np.fromfile(fname, dtype=np.uint16)
     views = raw.size // RECORD
     
+    if end is None:
+        end = views
+    
     records = raw.reshape(views, RECORD)
     metadata = records[:, :META]
     pixels = records[:, META:]
     ticks = metadata[:, 13].astype(np.int32)
     
-    return pixels, ticks
+    # Extract timestamp and compute displacement exactly like input_conversion.py
+    timestamp_1us = (
+        (metadata[:, 1].astype(np.uint64) << 48) |
+        (metadata[:, 2].astype(np.uint64) << 32) |
+        (metadata[:, 3].astype(np.uint64) << 16) |
+        metadata[:, 4].astype(np.uint64)
+    )
+    
+    # Read conveyor_speed securely from config
+    speed = config_data['conveyor_speed']
+    speed = speed * 1000 # conversion into mm/sec
+    
+    t0 = timestamp_1us[0] if len(timestamp_1us) > 0 else 0
+    displacement = speed * (timestamp_1us - t0) * 1e-6
+    
+    return metadata, pixels[start:end], ticks[start:end], displacement[start:end]
 
 def get_valid_indices(ticks, ticks_per_proj):
     """Filters out erroneous encoder ticks."""
@@ -176,52 +153,39 @@ def process_raw_dat(config_data, config_viz):
     # Configurable Slicing logic
     start = config_data.get('start_view', 0)
     end = config_data.get('end_view', None)
-    
-    # [NEW FIRMWARE] Object scan uses new extraction (no inline metadata, separate CSV)
-    metadata_csv = config_data['metadata_csv']
-    pixels, obj_view_ids, obj_disp = extraction_object(
-        config_data['object_file'], metadata_csv, config_data, start, end
-    )
+    obj_meta, pixels, ticks, obj_disp = extraction(config_data['object_file'], config_data, start, end)
 
-    # [NEW FIRMWARE] Debug plots: simplified since we no longer have inline metadata.
-    # We plot ViewID and displacement directly.
     if config_viz['generate_debug_plots']:
-        debug_dir = os.path.join(config_viz['proj_output_dir'], "debug")
-        os.makedirs(debug_dir, exist_ok=True)
-        plot_field(obj_view_ids, "ViewID", os.path.join(debug_dir, "view_id.png"))
-        if len(obj_disp) > 0:
-            plot_field(obj_disp, "displacement", os.path.join(debug_dir, "displacement.png"))
+        generate_debug_plots(
+            obj_meta, ticks, os.path.join(config_viz['proj_output_dir'], "debug"), 
+            start, end, obj_disp
+        )
 
     # Automatically defaults to 8
     ticks_per_proj = config_data.get('ticks_per_projection', 8)
     
-    # [NEW FIRMWARE] No tick-based filtering needed for object scan.
-    # ViewID is clean and sequential — use all views directly.
-    pixels_obj = pixels
-    view_ids_obj = obj_view_ids
-    disp_obj = obj_disp
+    valid_obj_idx = get_valid_indices(ticks, ticks_per_proj)
+    # print(valid_obj_idx) #! changed 
+    pixels_obj = pixels[valid_obj_idx]
+    ticks_obj = ticks[valid_obj_idx]
+    disp_obj = obj_disp[valid_obj_idx]
 
     T_MAX = config_data['t_max']
-    # [ORIGINAL] ticks_to_angle_idx still used for air scan encoder ticks
     def ticks_to_angle_idx(t):
         return ((T_MAX - t) // ticks_per_proj).astype(int)
-    # [NEW FIRMWARE] ViewID directly maps to angle: angle_deg = ViewID * (360/1440) = ViewID / 4
-    # This is equivalent to the old idx_to_angle(idx) = (idx * ticks_per_proj) // 32
     def idx_to_angle(idx):
         return (idx * ticks_per_proj) // 32
     
     # Group Air Averages across ALL provided air scans
-    # [ORIGINAL] Air scan still uses old extraction with inline metadata
     air_groups = {}
     for air_file in config_data['air_files']:
         print(f"Extracting {air_file}...")
-        air_pixels, air_ticks = extraction_air(air_file, config_data)
+        _, air_pixels, air_ticks, _ = extraction(air_file, config_data)
         
         valid_air_idx = get_valid_indices(air_ticks, ticks_per_proj)
         air_pixels = air_pixels[valid_air_idx]
         air_ticks = air_ticks[valid_air_idx]
         
-        # [ORIGINAL] Map air ticks to angle indices (same 0-1439 space as ViewID)
         for i, idx in enumerate(ticks_to_angle_idx(air_ticks)):
             if idx not in air_groups: 
                 air_groups[idx] = []
@@ -230,8 +194,7 @@ def process_raw_dat(config_data, config_viz):
     # Average the grouped air frames
     air_avg = {idx: np.mean(imgs, axis=0) for idx, imgs in air_groups.items()}
 
-    # [NEW FIRMWARE] Object's ViewID is directly the angle index (same space as air's angle_idx)
-    obj_angle_idx = view_ids_obj
+    obj_angle_idx = ticks_to_angle_idx(ticks_obj)
 
     corrected_pixels, angles, corrected_displacement = [], [], []
     frames_init = []
@@ -240,9 +203,7 @@ def process_raw_dat(config_data, config_viz):
     print("Computing log projections...")
     for i, idx in enumerate(obj_angle_idx):
         if idx in air_avg:
-            # [NEW FIRMWARE] Object pixels are already in 32x480 format — skip making_projection
-            I = pixels_obj[i].reshape(config_data['rows'], config_data['cols'])
-            # [ORIGINAL] Air pixels still need rearrangement via making_projection
+            I = making_projection(pixels_obj[i].reshape(1, -1))
             I0 = making_projection(air_avg[idx].reshape(1, -1))
 
             # Apply Beer-Lambert law
