@@ -105,10 +105,11 @@ def make_gif(frames, global_min, global_max, filepath, fps=5):
 
 # --- CORE PROCESSING ---
 
-# [NEW FIRMWARE] New function: reads object .dat files that have NO inline metadata.
+# [NEW FIRMWARE] Reads .dat files that have NO inline metadata.
 # Metadata (ViewID, timestamps) comes from a separate CSV file.
-def extraction_object(fname, metadata_csv, config_data, start=0, end=None):
-    """Reads new-firmware object .dat files (pure pixel data, no inline metadata).
+# Used for BOTH object and air scans (3Oct2026 firmware onwards).
+def extraction_new_firmware(fname, metadata_csv, config_data, start=0, end=None):
+    """Reads new-firmware .dat files (pure pixel data, no inline metadata).
     Metadata is read from a separate CSV file."""
     PIXELS = config_data['rows'] * config_data['cols']
 
@@ -142,24 +143,6 @@ def extraction_object(fname, metadata_csv, config_data, start=0, end=None):
     # replacing the old encoder tick -> angle_idx conversion.
     return pixels[start:end], view_ids[start:end], displacement[start:end]
 
-
-# [ORIGINAL] Kept for air scans which still have inline metadata (old firmware format).
-def extraction_air(fname, config_data):
-    """Reads raw 16-bit binary .dat files WITH inline metadata (air scan, old format)."""
-    META = config_data['meta_size']
-    PIXELS = config_data['rows'] * config_data['cols']
-    RECORD = META + PIXELS
-
-    raw = np.fromfile(fname, dtype=np.uint16)
-    views = raw.size // RECORD
-    
-    records = raw.reshape(views, RECORD)
-    metadata = records[:, :META]
-    pixels = records[:, META:]
-    ticks = metadata[:, 13].astype(np.int32)
-    
-    return pixels, ticks
-
 def get_valid_indices(ticks, ticks_per_proj):
     """Filters out erroneous encoder ticks."""
     diff = np.diff(ticks)
@@ -169,7 +152,7 @@ def get_valid_indices(ticks, ticks_per_proj):
 def process_raw_dat(config_data, config_viz):
     """
     Main orchestration function for dat files. 
-    Averages Air scans, aligns them to Object scans via encoder ticks, 
+    Averages Air scans, aligns them to Object scans via ViewID,
     and returns final cleaned projection matrices and rotation angles.
     """
     print(f"Extracting {config_data['object_file']}...")
@@ -179,7 +162,7 @@ def process_raw_dat(config_data, config_viz):
     
     # [NEW FIRMWARE] Object scan uses new extraction (no inline metadata, separate CSV)
     metadata_csv = config_data['metadata_csv']
-    pixels, obj_view_ids, obj_disp = extraction_object(
+    pixels, obj_view_ids, obj_disp = extraction_new_firmware(
         config_data['object_file'], metadata_csv, config_data, start, end
     )
 
@@ -192,45 +175,40 @@ def process_raw_dat(config_data, config_viz):
         if len(obj_disp) > 0:
             plot_field(obj_disp, "displacement", os.path.join(debug_dir, "displacement.png"))
 
-    # Automatically defaults to 8
-    ticks_per_proj = config_data.get('ticks_per_projection', 8)
-    
     # [NEW FIRMWARE] No tick-based filtering needed for object scan.
-    # ViewID is clean and sequential — use all views directly.
+    # ViewID is clean and sequential - use all views directly.
     pixels_obj = pixels
     view_ids_obj = obj_view_ids
     disp_obj = obj_disp
 
-    T_MAX = config_data['t_max']
-    # [ORIGINAL] ticks_to_angle_idx still used for air scan encoder ticks
-    def ticks_to_angle_idx(t):
-        return ((T_MAX - t) // ticks_per_proj).astype(int)
     # [NEW FIRMWARE] ViewID directly maps to angle: angle_deg = ViewID * (360/1440) = ViewID / 4
-    # This is equivalent to the old idx_to_angle(idx) = (idx * ticks_per_proj) // 32
-    def idx_to_angle(idx):
-        return (idx * ticks_per_proj) // 32
+    # This replaces the old ticks_to_angle_idx and idx_to_angle conversions.
+    # 1440 views per revolution, each ViewID step = 0.25 degrees
+    VIEWS_PER_REV = config_data.get('views_per_revolution', 1440)
+    def view_id_to_angle(vid):
+        return vid * 360.0 / VIEWS_PER_REV
     
     # Group Air Averages across ALL provided air scans
-    # [ORIGINAL] Air scan still uses old extraction with inline metadata
+    # [NEW FIRMWARE] Air scan also uses new extraction with separate CSV metadata
     air_groups = {}
-    for air_file in config_data['air_files']:
+    air_files = config_data['air_files']
+    air_metadata_csvs = config_data['air_metadata_csvs']
+    
+    for air_file, air_csv in zip(air_files, air_metadata_csvs):
         print(f"Extracting {air_file}...")
-        air_pixels, air_ticks = extraction_air(air_file, config_data)
+        # [NEW FIRMWARE] Air scan also has no inline metadata, uses CSV
+        air_pixels, air_view_ids, _ = extraction_new_firmware(air_file, air_csv, config_data)
         
-        valid_air_idx = get_valid_indices(air_ticks, ticks_per_proj)
-        air_pixels = air_pixels[valid_air_idx]
-        air_ticks = air_ticks[valid_air_idx]
-        
-        # [ORIGINAL] Map air ticks to angle indices (same 0-1439 space as ViewID)
-        for i, idx in enumerate(ticks_to_angle_idx(air_ticks)):
-            if idx not in air_groups: 
-                air_groups[idx] = []
-            air_groups[idx].append(air_pixels[i])
+        # [NEW FIRMWARE] Group air frames by ViewID directly (no tick filtering needed)
+        for i, vid in enumerate(air_view_ids):
+            if vid not in air_groups: 
+                air_groups[vid] = []
+            air_groups[vid].append(air_pixels[i])
 
     # Average the grouped air frames
-    air_avg = {idx: np.mean(imgs, axis=0) for idx, imgs in air_groups.items()}
+    air_avg = {vid: np.mean(imgs, axis=0) for vid, imgs in air_groups.items()}
 
-    # [NEW FIRMWARE] Object's ViewID is directly the angle index (same space as air's angle_idx)
+    # [NEW FIRMWARE] Object's ViewID is directly used for alignment with air ViewID
     obj_angle_idx = view_ids_obj
 
     corrected_pixels, angles, corrected_displacement = [], [], []
@@ -238,12 +216,11 @@ def process_raw_dat(config_data, config_viz):
     global_min, global_max = float("inf"), float("-inf")
     
     print("Computing log projections...")
-    for i, idx in enumerate(obj_angle_idx):
-        if idx in air_avg:
-            # [NEW FIRMWARE] Object pixels are already in 32x480 format — skip making_projection
+    for i, vid in enumerate(obj_angle_idx):
+        if vid in air_avg:
+            # [NEW FIRMWARE] Both object and air pixels are already in 32x480 format
             I = pixels_obj[i].reshape(config_data['rows'], config_data['cols'])
-            # [ORIGINAL] Air pixels still need rearrangement via making_projection
-            I0 = making_projection(air_avg[idx].reshape(1, -1))
+            I0 = air_avg[vid].reshape(config_data['rows'], config_data['cols'])
 
             # Apply Beer-Lambert law
             proj = log_done(I, I0)
@@ -252,14 +229,15 @@ def process_raw_dat(config_data, config_viz):
             global_min = min(global_min, proj.min())
             global_max = max(global_max, proj.max())
 
+            angle_deg = view_id_to_angle(vid)
             # Save diagnostic projection images
-            if idx % config_viz['save_frequency'] == 0:
+            if vid % config_viz['save_frequency'] == 0:
                 frames_init.append(proj)
                 if config_viz['save_projection_images']:
-                    save_image(proj, os.path.join(config_viz['proj_output_dir'], "projections", f"proj_{i}_{idx_to_angle(idx)}.png"))
+                    save_image(proj, os.path.join(config_viz['proj_output_dir'], "projections", f"proj_{i}_{angle_deg:.2f}.png"))
 
             corrected_pixels.append(proj)
-            angles.append(idx_to_angle(idx))
+            angles.append(angle_deg)
             corrected_displacement.append(disp_obj[i])
 
     if config_viz['save_projection_gif'] and frames_init:
